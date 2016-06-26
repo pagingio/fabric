@@ -428,3 +428,108 @@ def execute(task, *args, **kwargs):
     # Return what we can from the inner task executions
 
     return results
+
+
+def executes(task, hosts, all_args, *args, **kwargs):
+    """
+    """
+    my_env = {'clean_revert': True}
+    results = {}
+    # Obtain task
+    is_callable = callable(task)
+    if not (is_callable or _is_task(task)):
+        # Assume string, set env.command to it
+        my_env['command'] = task
+        task = crawl(task, state.commands)
+        if task is None:
+            msg = "%r is not callable or a valid task name" % (my_env['command'],)
+            if state.env.get('skip_unknown_tasks', False):
+                warn(msg)
+                return
+            else:
+                abort(msg)
+    # Set env.command if we were given a real function or callable task obj
+    else:
+        dunder_name = getattr(task, '__name__', None)
+        my_env['command'] = getattr(task, 'name', dunder_name)
+    # Normalize to Task instance if we ended up with a regular callable
+    if not _is_task(task):
+        task = WrappedCallableTask(task)
+
+    my_env['all_hosts'] = hosts
+    my_env['all_args'] = all_args
+
+    parallel = requires_parallel(task)
+    if parallel:
+        # Import multiprocessing if needed, erroring out usefully
+        # if it can't.
+        try:
+            import multiprocessing
+        except ImportError:
+            import traceback
+            tb = traceback.format_exc()
+            abort(tb + """
+    At least one task needs to be run in parallel, but the
+    multiprocessing module cannot be imported (see above
+    traceback.) Please make sure the module is installed
+    or that the above ImportError is fixed.""")
+    else:
+        multiprocessing = None
+
+    # Get pool size for this task
+    pool_size = task.get_pool_size(my_env['all_hosts'], state.env.pool_size)
+    # Set up job queue in case parallel is needed
+    queue = multiprocessing.Queue() if parallel else None
+    jobs = JobQueue(pool_size, queue)
+    if state.output.debug:
+        jobs._debug = True
+
+    has_hosts = len(my_env['all_hosts']) > 0
+    for index in xrange(len(my_env['all_args'])):
+        host = my_env['all_args'][index].get('host', '')
+        if has_hosts:
+            host = my_env['all_hosts'][index]
+
+        input_kwargs = my_env['all_args'][index]
+
+        try:
+            results[host] = _execute(
+                task, host, my_env, args, input_kwargs, jobs, queue,
+                multiprocessing
+            )
+        except NetworkError, e:
+            results[host] = e
+            # Backwards compat test re: whether to use an exception or
+            # abort
+            if not state.env.use_exceptions_for['network']:
+                func = warn if state.env.skip_bad_hosts else abort
+                error(e.message, func=func, exception=e.wrapped)
+            else:
+                raise
+
+        # If requested, clear out connections here and not just at the end.
+        if state.env.eagerly_disconnect:
+            disconnect_all()
+
+    # If running in parallel, block until job queue is emptied
+    if jobs:
+        err = "One or more hosts failed while executing task '%s'" % (
+            my_env['command']
+        )
+        jobs.close()
+        # Abort if any children did not exit cleanly (fail-fast).
+        # This prevents Fabric from continuing on to any other tasks.
+        # Otherwise, pull in results from the child run.
+        ran_jobs = jobs.run()
+        for name, d in ran_jobs.iteritems():
+            if d['exit_code'] != 0:
+                if isinstance(d['results'], NetworkError) and \
+                        _is_network_error_ignored():
+                    error(d['results'].message, func=warn, exception=d['results'].wrapped)
+                elif isinstance(d['results'], BaseException):
+                    error(err, exception=d['results'])
+                else:
+                    error(err)
+            results[name] = d['results']
+
+    return results
