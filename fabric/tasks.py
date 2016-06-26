@@ -484,12 +484,11 @@ def executes(task, hosts, all_args, *args, **kwargs):
     if state.output.debug:
         jobs._debug = True
 
-    has_hosts = len(my_env['all_hosts']) > 0
-    for index in xrange(len(my_env['all_args'])):
-        host = my_env['all_args'][index].get('host', '')
-        if has_hosts:
-            host = my_env['all_hosts'][index]
+    if len(my_env['all_hosts']) == 0:
+        my_env['all_hosts'] = [my_env['all_args'][index].get('host', '') for index in xrange(len(my_env['all_args']))]
 
+    for index in xrange(len(my_env['all_args'])):
+        host = my_env['all_hosts'][index]
         input_kwargs = my_env['all_args'][index]
 
         try:
