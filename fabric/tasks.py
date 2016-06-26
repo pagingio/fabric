@@ -430,9 +430,11 @@ def execute(task, *args, **kwargs):
     return results
 
 
-def executes(task, hosts, all_args, *args, **kwargs):
+def executes(task, all_args, *args, **kwargs):
     """
     """
+    hosts = [all_args[index].get('host', '') for index in xrange(len(all_args))]
+
     my_env = {'clean_revert': True}
     results = {}
     # Obtain task
@@ -484,13 +486,13 @@ def executes(task, hosts, all_args, *args, **kwargs):
     if state.output.debug:
         jobs._debug = True
 
-    if len(my_env['all_hosts']) == 0:
-        my_env['all_hosts'] = [my_env['all_args'][index].get('host', '') for index in xrange(len(my_env['all_args']))]
-
+    has_hosts = len(my_env['all_hosts']) > 0
     for index in xrange(len(my_env['all_args'])):
-        host = my_env['all_hosts'][index]
-        input_kwargs = my_env['all_args'][index]
+        host = my_env['all_args'][index].get('host', '')
+        if has_hosts:
+            host = my_env['all_hosts'][index]
 
+        input_kwargs = my_env['all_args'][index]
         try:
             results[host] = _execute(
                 task, host, my_env, args, input_kwargs, jobs, queue,
